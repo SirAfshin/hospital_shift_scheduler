@@ -3,18 +3,21 @@ from app.models.staff_data import staff_list, Role
 
 # Constants
 NUM_DAYS = 31  # Tir 1404
-HOLIDAYS = [5, 6, 12, 13, 19, 20]
+# TODO: apply the real holidays
+HOLIDAYS = [6, 13, 14, 15, 20, 27]
 
 TOTAL_STAFF = len(staff_list)
 NUM_PROF = int(TOTAL_STAFF * 0.55)
 NUM_HELP = TOTAL_STAFF - NUM_PROF
 TOTAL_RELIEF_MAX_SHIFTS = 25
+MONTHLY_LEAVE_TOTAL = 78 # int(TOTAL_STAFF * 2.5)
+MIN_LEAVE_ASSIGNED = 39 # MONTHLY_LEAVE_TOTAL // 2
+MONTHLY_TRAINING_TOTAL = 8 # round(TOTAL_STAFF * 3 / 12)
+MAX_MONTHLY_WORKLOAD = 26 
 
-MONTHLY_LEAVE_TOTAL = int(TOTAL_STAFF * 2.5)
-MIN_LEAVE_ASSIGNED = MONTHLY_LEAVE_TOTAL // 2
-MONTHLY_TRAINING_TOTAL = round(TOTAL_STAFF * 3 / 12)
-
+# TODO: should i remove DE beacuse a D followed by E would be that
 SHIFT_TYPES = ["M", "A", "D", "E", "N", "DE"]
+TOTAL_SHIFT_TYPE = len(SHIFT_TYPES)
 SHIFT_INDICES = {s: i for i, s in enumerate(SHIFT_TYPES)}
 
 def add_basic_constraints(model: cp_model.CpModel, shifts):
@@ -129,11 +132,97 @@ def add_shift_distribution_constraints(model: cp_model.CpModel, shifts):
         model.Add(sum(shifts[p, d, SHIFT_INDICES["E"]] for p in range(TOTAL_STAFF)) == target_m_e)
         model.Add(sum(shifts[p, d, SHIFT_INDICES["N"]] for p in range(TOTAL_STAFF)) == target_n)
 
+
+###########################################
+def add_my_custom_shift_constraints(model: cp_model.CpModel, shifts):
+    # One shift per person per day
+    for p in range(TOTAL_STAFF):
+        for d in range(NUM_DAYS):
+            model.Add(sum(shifts[p, d, s] for s in range(TOTAL_SHIFT_TYPE)) <= 1)
+
+    # Total workload of each person in month
+    for p in range(TOTAL_STAFF):
+        workload = sum(
+            shifts[p, d, SHIFT_INDICES["M"]] +
+            shifts[p, d, SHIFT_INDICES["A"]] +
+            shifts[p, d, SHIFT_INDICES["D"]] +
+            shifts[p, d, SHIFT_INDICES["E"]] +
+            2 * shifts[p, d, SHIFT_INDICES["N"]] +
+            2 * shifts[p, d, SHIFT_INDICES["DE"]]
+            for d in range(NUM_DAYS)
+        )
+    model.Add(workload <= MAX_MONTHLY_WORKLOAD)
+
+    # No shoft after a night the other day
+    for p in range(TOTAL_STAFF):
+        for d in range(NUM_DAYS - 1):
+            model.Add( (shifts[p, d, SHIFT_INDICES["N"]] + 
+                        shifts[p, d + 1, SHIFT_INDICES["D"]] + 
+                        shifts[p, d + 1, SHIFT_INDICES["E"]] +
+                        shifts[p, d + 1, SHIFT_INDICES["N"]] + 
+                        shifts[p, d + 1, SHIFT_INDICES["DE"]] +
+                        shifts[p, d + 1, SHIFT_INDICES["A"]] +
+                        shifts[p, d + 1, SHIFT_INDICES["M"]] ) <= 1) # TODO: must add other shift things as well
+
+    # Holiday shift count    
+    for d in HOLIDAYS:
+        # total_staff_today = sum(shifts[p, d, s] for p in range(TOTAL_STAFF) for s in range(TOTAL_SHIFT_TYPE))
+        # model.Add(total_staff_today == (TOTAL_STAFF // 2) + 1)
+        model.Add(sum( (shifts[p, d, SHIFT_INDICES["D"]]+shifts[p, d, SHIFT_INDICES["DE"]]) for p in range(TOTAL_STAFF)) == 6)
+        model.Add(sum( (shifts[p, d, SHIFT_INDICES["E"]]+shifts[p, d, SHIFT_INDICES["DE"]]) for p in range(TOTAL_STAFF)) == 5)
+        model.Add(sum(shifts[p, d, SHIFT_INDICES["N"]] for p in range(TOTAL_STAFF)) == 4)
+
+    # Normal day shift count
+    for d in range(NUM_DAYS):
+        if d not in HOLIDAYS:
+            model.Add(sum( (shifts[p, d, SHIFT_INDICES["D"]]+shifts[p, d, SHIFT_INDICES["DE"]]) for p in range(TOTAL_STAFF)) == 9)
+            model.Add(sum( (shifts[p, d, SHIFT_INDICES["E"]]+shifts[p, d, SHIFT_INDICES["DE"]]) for p in range(TOTAL_STAFF)) == 8)
+            model.Add(sum(shifts[p, d, SHIFT_INDICES["N"]] for p in range(TOTAL_STAFF)) == 6)
+
+
+    # Total leave count between
+    leave_vars = [shifts[p, d, SHIFT_INDICES["M"]] for p in range(TOTAL_STAFF) for d in range(NUM_DAYS)]
+    model.Add(sum(leave_vars) >= MIN_LEAVE_ASSIGNED)
+    model.Add(sum(leave_vars) <= MONTHLY_LEAVE_TOTAL)
+    # Individual leave count
+    for p in range(TOTAL_STAFF):
+        person_leave_count = sum(shifts[p, d, SHIFT_INDICES["M"]] for d in range(NUM_DAYS))
+        model.Add(person_leave_count < 3)
+
+    # Total monthly training shifts
+    training_vars = [shifts[p, d, SHIFT_INDICES["A"]] for p in range(TOTAL_STAFF) for d in range(NUM_DAYS)]
+    model.Add(sum(training_vars) == MONTHLY_TRAINING_TOTAL)
+    # Individual training constraint
+    for p in range(TOTAL_STAFF):
+        person_train_count = sum(shifts[p,d,SHIFT_INDICES['A']] for d in range(NUM_DAYS))
+        model.add(person_train_count <= 3)
+
+    # No shifts if on Leave (Moakhasi)
+    for p in range(TOTAL_STAFF):
+        for d in range(NUM_DAYS):
+            leave = shifts[p, d, SHIFT_INDICES["M"]]
+            model.Add( sum(shifts[p, d, s] for s in range(TOTAL_SHIFT_TYPE) 
+                           if s != SHIFT_INDICES["M"]) == 0).OnlyEnforceIf(leave)
+
+    for p in range(TOTAL_STAFF):
+        for d in range(NUM_DAYS - 1):
+            model.Add(shifts[p, d, SHIFT_INDICES["DE"]] + shifts[p, d + 1, SHIFT_INDICES["DE"]] + shifts[p, d + 1, SHIFT_INDICES["N"]]  <= 1)
+
+
+    # Max N and DE shifts per person
+    for p in range(TOTAL_STAFF):
+        total_n_shifts = sum(shifts[p, d, SHIFT_INDICES["N"]] + shifts[p, d, SHIFT_INDICES["DE"]] for d in range(NUM_DAYS))
+        model.Add(total_n_shifts <= 6)
+
+
 def apply_all_constraints(model: cp_model.CpModel, shifts):
-    add_basic_constraints(model, shifts)
-    add_leave_constraints(model, shifts)
-    add_training_constraints(model, shifts)
-    add_holiday_staffing_constraints(model, shifts)
-    add_supervisor_fixed_shifts(model, shifts)
-    add_prof_help_balance_constraint(model, shifts)
-    add_shift_distribution_constraints(model, shifts)
+    # add_basic_constraints(model, shifts)
+    # add_leave_constraints(model, shifts)
+    # add_training_constraints(model, shifts)
+    # add_holiday_staffing_constraints(model, shifts)
+    # add_supervisor_fixed_shifts(model, shifts)
+    # add_prof_help_balance_constraint(model, shifts)
+    # add_shift_distribution_constraints(model, shifts)
+    
+    # New Era
+    add_my_custom_shift_constraints(model, shifts)
