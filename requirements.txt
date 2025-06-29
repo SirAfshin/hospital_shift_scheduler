@@ -1,0 +1,6 @@
+ortools
+pulp
+fastapi
+uvicorn
+pydantic
+pytest
