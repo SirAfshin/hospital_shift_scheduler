@@ -99,9 +99,17 @@ if __name__ == "__main__":
         # Convert to Excel
         schedule_json_to_excel(sched, "schedule1.xlsx")
 
+        # create_hospital_style_schedule(
+        #         sched,
+        #         "hospital_style_schedule1.xlsx",
+        #         staff_names=None,  # or provide {0: "Alice", 1: "Bob", ...}
+        #         start_date="2025-07-01"  # adjust this to your month start date
+        #     )
+
         create_hospital_style_schedule(
-                sched,
-                "hospital_style_schedule1.xlsx",
-                staff_names=None,  # or provide {0: "Alice", 1: "Bob", ...}
-                start_date="2025-07-01"  # adjust this to your month start date
-            )
+            sched,  # your schedule JSON
+            "hospital_schedule_hijri1.xlsx",
+            staff_names=None,  # or {0: "Ali", 1: "Sara"}
+            start_date="1404-04-01", 
+            staff_list= staff_list
+        )
