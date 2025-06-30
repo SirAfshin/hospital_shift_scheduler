@@ -111,5 +111,6 @@ if __name__ == "__main__":
             "hospital_schedule_hijri1.xlsx",
             staff_names=None,  # or {0: "Ali", 1: "Sara"}
             start_date="1404-04-01", 
-            staff_list= staff_list
+            staff_list= staff_list,
+            is_rtl = True,
         )

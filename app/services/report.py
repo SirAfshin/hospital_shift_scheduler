@@ -383,7 +383,7 @@ def schedule_json_to_excel(schedule_json, excel_filepath):
 #     print(f"Hospital style Excel schedule saved to {excel_filepath}")
 
 
-def create_hospital_style_schedule(schedule_json, excel_filepath, staff_names=None, staff_list=None, start_date=None):
+def create_hospital_style_schedule(schedule_json, excel_filepath, staff_names=None, staff_list=None, start_date=None, is_rtl=False):
     from openpyxl.styles import PatternFill, Alignment
     import pandas as pd
     from openpyxl import load_workbook
@@ -441,6 +441,10 @@ def create_hospital_style_schedule(schedule_json, excel_filepath, staff_names=No
     # Open with openpyxl for styling
     wb = load_workbook(excel_filepath)
     ws = wb.active
+
+    if is_rtl == True:
+        # Set sheet direction to Right-To-Left
+        ws.sheet_view.rightToLeft = True
 
     alignment = Alignment(horizontal="center", vertical="center")
     fills = {k: PatternFill(start_color=v, end_color=v, fill_type="solid") for k, v in SHIFT_COLORS.items()}
