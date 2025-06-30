@@ -4,7 +4,7 @@ from app.models.staff_data import staff_list, Role
 # Constants
 NUM_DAYS = 31  # Tir 1404
 # TODO: apply the real holidays
-HOLIDAYS = [6, 13, 14, 15, 20, 27]
+HOLIDAYS = [6-1, 13-1, 14-1, 15-1, 20-1, 27-1] # days start from 0 not 1 in the python code i wrote
 
 TOTAL_STAFF = len(staff_list)
 NUM_PROF = int(TOTAL_STAFF * 0.55)
@@ -134,6 +134,7 @@ def add_shift_distribution_constraints(model: cp_model.CpModel, shifts):
 
 
 ###########################################
+#TODO: add role based constraints
 def add_my_custom_shift_constraints(model: cp_model.CpModel, shifts):
     # One shift per person per day
     for p in range(TOTAL_STAFF):
@@ -153,7 +154,7 @@ def add_my_custom_shift_constraints(model: cp_model.CpModel, shifts):
         )
     model.Add(workload <= MAX_MONTHLY_WORKLOAD)
 
-    # No shoft after a night the other day
+    # No shit after a night the other day
     for p in range(TOTAL_STAFF):
         for d in range(NUM_DAYS - 1):
             model.Add( (shifts[p, d, SHIFT_INDICES["N"]] + 
@@ -163,6 +164,18 @@ def add_my_custom_shift_constraints(model: cp_model.CpModel, shifts):
                         shifts[p, d + 1, SHIFT_INDICES["DE"]] +
                         shifts[p, d + 1, SHIFT_INDICES["A"]] +
                         shifts[p, d + 1, SHIFT_INDICES["M"]] ) <= 1) # TODO: must add other shift things as well
+
+    # No shit after a DE the other day
+    for p in range(TOTAL_STAFF):
+        for d in range(NUM_DAYS - 1):
+            model.Add( (shifts[p, d, SHIFT_INDICES["DE"]] + 
+                        shifts[p, d + 1, SHIFT_INDICES["D"]] + 
+                        shifts[p, d + 1, SHIFT_INDICES["E"]] +
+                        shifts[p, d + 1, SHIFT_INDICES["N"]] + 
+                        shifts[p, d + 1, SHIFT_INDICES["DE"]] +
+                        shifts[p, d + 1, SHIFT_INDICES["A"]] +
+                        shifts[p, d + 1, SHIFT_INDICES["M"]] ) <= 1) # TODO: must add other shift things as well
+
 
     # Holiday shift count    
     for d in HOLIDAYS:
@@ -182,12 +195,15 @@ def add_my_custom_shift_constraints(model: cp_model.CpModel, shifts):
 
     # Total leave count between
     leave_vars = [shifts[p, d, SHIFT_INDICES["M"]] for p in range(TOTAL_STAFF) for d in range(NUM_DAYS)]
-    model.Add(sum(leave_vars) >= MIN_LEAVE_ASSIGNED)
-    model.Add(sum(leave_vars) <= MONTHLY_LEAVE_TOTAL)
+    model.Add(sum(leave_vars) == MIN_LEAVE_ASSIGNED) 
+    # model.Add(sum(leave_vars) >= MIN_LEAVE_ASSIGNED)
+    # model.Add(sum(leave_vars) <= MONTHLY_LEAVE_TOTAL)
+    
     # Individual leave count
     for p in range(TOTAL_STAFF):
         person_leave_count = sum(shifts[p, d, SHIFT_INDICES["M"]] for d in range(NUM_DAYS))
         model.Add(person_leave_count < 3)
+
 
     # Total monthly training shifts
     training_vars = [shifts[p, d, SHIFT_INDICES["A"]] for p in range(TOTAL_STAFF) for d in range(NUM_DAYS)]
@@ -197,22 +213,279 @@ def add_my_custom_shift_constraints(model: cp_model.CpModel, shifts):
         person_train_count = sum(shifts[p,d,SHIFT_INDICES['A']] for d in range(NUM_DAYS))
         model.add(person_train_count <= 3)
 
-    # No shifts if on Leave (Moakhasi)
+    # No shifts if on Leave (Morakhasi)
     for p in range(TOTAL_STAFF):
         for d in range(NUM_DAYS):
             leave = shifts[p, d, SHIFT_INDICES["M"]]
             model.Add( sum(shifts[p, d, s] for s in range(TOTAL_SHIFT_TYPE) 
                            if s != SHIFT_INDICES["M"]) == 0).OnlyEnforceIf(leave)
 
-    for p in range(TOTAL_STAFF):
-        for d in range(NUM_DAYS - 1):
-            model.Add(shifts[p, d, SHIFT_INDICES["DE"]] + shifts[p, d + 1, SHIFT_INDICES["DE"]] + shifts[p, d + 1, SHIFT_INDICES["N"]]  <= 1)
+    # No DE or N after DE
+    # for p in range(TOTAL_STAFF):
+    #     for d in range(NUM_DAYS - 1):
+    #         model.Add(shifts[p, d, SHIFT_INDICES["DE"]] + shifts[p, d + 1, SHIFT_INDICES["DE"]] + shifts[p, d + 1, SHIFT_INDICES["N"]]  <= 1)
 
 
-    # Max N and DE shifts per person
-    for p in range(TOTAL_STAFF):
-        total_n_shifts = sum(shifts[p, d, SHIFT_INDICES["N"]] + shifts[p, d, SHIFT_INDICES["DE"]] for d in range(NUM_DAYS))
-        model.Add(total_n_shifts <= 6)
+    # # Max N and DE shifts per person
+    # for p in range(TOTAL_STAFF):
+    #     total_n_shifts = sum(shifts[p, d, SHIFT_INDICES["N"]] + shifts[p, d, SHIFT_INDICES["DE"]] for d in range(NUM_DAYS))
+    #     model.Add(total_n_shifts <= 6)
+
+
+def add_my_costum_role_constraints(model: cp_model.CpModel, shifts):
+    # Staff indices by role
+    professionals = [s.id for s in staff_list if s.role == Role.PROFESSIONAL]
+    helpers = [s.id for s in staff_list if s.role == Role.HELPER]
+    reliefs = [s.id for s in staff_list if s.role == Role.RELIEF]
+
+    # Staff indices by gender
+    females = [s.id for s in staff_list if s.gender == "F"]
+    males = [s.id for s in staff_list if s.gender == "M"]
+
+    # Supervisors
+    supervisors = [s.id for s in staff_list if s.is_supervisor]
+    head_nurse_id = next(s.id for s in staff_list if s.supervisor_type == "HEAD_NURSE")
+    shift_supervisor_id = next(s.id for s in staff_list if s.supervisor_type == "SHIFT_SUPERVISOR")
+    evening_supervisor_id = next(s.id for s in staff_list if s.supervisor_type == "EVENING_SUPERVISOR")
+    even_night_supervisor_id = next(s.id for s in staff_list if s.supervisor_type == "EVEN_NIGHT_SUPERVISOR")
+    odd_night_supervisor_id = next(s.id for s in staff_list if s.supervisor_type == "ODD_NIGHT_SUPERVISOR")
+
+ 
+    '''Head Nurse'''
+    # Head Nurse D every days except holidays
+    for d in range(NUM_DAYS):
+        if d not in HOLIDAYS:
+            model.Add(shifts[head_nurse_id, d, SHIFT_INDICES["D"]] == 1)
+            # All other shifts on those days are 0
+            for s in SHIFT_INDICES.values():
+                if s != SHIFT_INDICES["D"]:
+                    model.Add(shifts[head_nurse_id, d, s] == 0)
+    # Head Nurse no shift on holidays
+    for d in HOLIDAYS:
+        for s in SHIFT_INDICES.values():
+            model.Add(shifts[head_nurse_id, d, s] == 0)
+
+    '''Shift Supervisor (staff)'''
+    # Shift supervisor is D everyday except holidays
+    for d in range(NUM_DAYS):
+        if d not in HOLIDAYS:
+            model.Add(shifts[shift_supervisor_id, d, SHIFT_INDICES["D"]] == 1)
+            # No other shifts allowed on those days
+            for s in SHIFT_INDICES.values():
+                if s != SHIFT_INDICES["D"]:
+                    model.Add(shifts[shift_supervisor_id, d, s] == 0)
+    
+    # At most one D shift on holidays
+    # Collect total D shifts on holidays
+    holiday_D_shifts = [shifts[shift_supervisor_id, d, SHIFT_INDICES["D"]] for d in HOLIDAYS]
+    
+    # No other shifts on holidays
+    for d in HOLIDAYS:
+        for s in SHIFT_INDICES.values():
+            if s != SHIFT_INDICES["D"]:
+                model.Add(shifts[shift_supervisor_id, d, s] == 0)
+
+    # At most one E shift across all holidays
+    model.Add(sum(holiday_D_shifts) <= 1)
+
+
+    '''EVENING SUPERVISOR'''
+    # Only E shifts on normal days
+    for d in range(NUM_DAYS):
+        if d not in HOLIDAYS:
+            model.Add(shifts[evening_supervisor_id, d, SHIFT_INDICES["E"]] == 1)
+            # No other shifts
+            for s in SHIFT_INDICES.values():
+                if s != SHIFT_INDICES["E"]:
+                    model.Add(shifts[evening_supervisor_id, d, s] == 0)
+    
+    # At most one E shift on holidays
+    # Collect total E shifts on holidays
+    holiday_E_shifts = [shifts[evening_supervisor_id, d, SHIFT_INDICES["E"]] for d in HOLIDAYS]
+
+    # No other shifts on holidays
+    for d in HOLIDAYS:
+        for s in SHIFT_INDICES.values():
+            if s != SHIFT_INDICES["E"]:
+                model.Add(shifts[evening_supervisor_id, d, s] == 0)
+
+    # At most one E shift across all holidays
+    model.Add(sum(holiday_E_shifts) <= 1)
+
+
+
+    '''NIGHT SUPERVISORs'''
+    # EVEN_NIGHT_SUPERVISOR
+    even_night_holiday_shifts = []
+
+    for d in range(NUM_DAYS):
+        if d not in HOLIDAYS:
+            if d % 2 == 0:
+                # Can work N shift on even days
+                model.Add(shifts[even_night_supervisor_id, d, SHIFT_INDICES["N"]] == 1)
+            else:
+                # No shifts at all on odd days
+                for s in SHIFT_INDICES.values():
+                    model.Add(shifts[even_night_supervisor_id, d, s] == 0)
+        else:
+            # On holidays: collect N shifts to count later
+            even_night_holiday_shifts.append(shifts[even_night_supervisor_id, d, SHIFT_INDICES["N"]])
+            # No other shifts on holidays
+            for s in SHIFT_INDICES.values():
+                if s != SHIFT_INDICES["N"]:
+                    model.Add(shifts[even_night_supervisor_id, d, s] == 0)
+
+    # At most 1 N shift on holidays
+    model.Add(sum(even_night_holiday_shifts) <= 1)
+
+    # ODD_NIGHT_SUPERVISOR
+    odd_night_holiday_shifts = []
+
+    for d in range(NUM_DAYS):
+        if d not in HOLIDAYS:
+            if d % 2 == 1:
+                # Can work N shift on odd days
+                model.Add(shifts[odd_night_supervisor_id, d, SHIFT_INDICES["N"]] == 1)
+            else:
+                # No shifts at all on even days
+                for s in SHIFT_INDICES.values():
+                    model.Add(shifts[odd_night_supervisor_id, d, s] == 0)
+        else:
+            # On holidays: collect N shifts to count later
+            odd_night_holiday_shifts.append(shifts[odd_night_supervisor_id, d, SHIFT_INDICES["N"]])
+            # No other shifts on holidays
+            for s in SHIFT_INDICES.values():
+                if s != SHIFT_INDICES["N"]:
+                    model.Add(shifts[odd_night_supervisor_id, d, s] == 0)
+
+    # At most 1 N shift on holidays
+    model.Add(sum(odd_night_holiday_shifts) <= 1)
+
+    # TODO: no feasible answer for the M and for Off it finds is it OK?
+    '''That one person with 16,20 leave'''
+    # for d in range(15, 20):  # days 16,17,18,19,20
+    #     model.Add(shifts[5, d, SHIFT_INDICES["M"]] == 1)
+    for d in range(15, 20):
+        model.Add(sum(shifts[5, d, s] for s in range(TOTAL_SHIFT_TYPE)) == 0)
+
+    
+
+
+def add_my_costum_other_constraints(model: cp_model.CpModel, shifts):
+    important_shifts = [
+        SHIFT_INDICES["D"],
+        SHIFT_INDICES["E"],
+        SHIFT_INDICES["DE"],
+        SHIFT_INDICES["N"],
+    ]
+
+    # At least one man and at least one woman rule
+    for d in range(NUM_DAYS):
+        for s in important_shifts:
+            male_count = sum(shifts[staff.id, d, s] for staff in staff_list if staff.gender == "M")
+            female_count = sum(shifts[staff.id, d, s] for staff in staff_list if staff.gender == "F")
+            
+            model.Add(male_count >= 1)
+            model.Add(female_count >= 1)
+
+    '''Releif Personnel'''
+    # Relief staff shift constraints
+    for staff in staff_list:
+        if staff.role == Role.RELIEF:
+            staff_shift_vars = [
+                shifts[staff.id, d, s]
+                for d in range(NUM_DAYS)
+                for s in range(len(SHIFT_TYPES))
+            ]
+
+            # Allow only DE, D, E, N shifts
+            for d in range(NUM_DAYS):
+                for s in range(len(SHIFT_TYPES)):
+                    shift_name = SHIFT_TYPES[s]
+                    if shift_name not in ["D", "E", "N", "DE"]:
+                        model.Add(shifts[staff.id, d, s] == 0)
+
+    # Total shift count for relief staff (DE, D, E, N only)
+    relief_shift_vars = [
+        shifts[staff.id, d, s]
+        for staff in staff_list
+        if staff.role == Role.RELIEF
+        for d in range(NUM_DAYS)
+        for s in range(len(SHIFT_TYPES))
+        if SHIFT_TYPES[s] in ["D", "E", "N", "DE"]
+    ]
+
+    model.Add(sum(relief_shift_vars) <= 25)
+
+
+
+    # TODO: this one makes the solution to not be feasible
+    # # %50 rule for professionals and helpers
+    # for d in range(NUM_DAYS):
+    #     for s in important_shifts:
+    #         professionals = [
+    #             shifts[staff.id, d, s] for staff in staff_list 
+    #             if staff.role in [Role.PROFESSIONAL, Role.RELIEF]
+    #         ]
+    #         helpers = [
+    #             shifts[staff.id, d, s] for staff in staff_list 
+    #             if staff.role == Role.HELPER
+    #         ]
+            
+    #         total_staff_in_shift = sum(professionals) + sum(helpers)
+            
+    #         # Now enforce that half of the people in this shift are professionals, half helpers
+    #         half_staff = model.NewIntVar(0, TOTAL_STAFF, f"half_staff_d{d}_s{s}")
+    #         model.Add(half_staff * 2 == total_staff_in_shift)
+            
+    #         model.Add(sum(professionals) == half_staff)
+    #         model.Add(sum(helpers) == total_staff_in_shift - half_staff)
+    important_shifts = [
+        SHIFT_INDICES["D"],
+        SHIFT_INDICES["E"],
+        SHIFT_INDICES["N"]
+    ]
+
+    for d in range(NUM_DAYS):
+        for s in important_shifts:
+            professionals = []
+            helpers = []
+
+            for staff in staff_list:
+                if staff.role in [Role.PROFESSIONAL, Role.RELIEF]:
+                    # DE counts for both D and E
+                    if s in [SHIFT_INDICES["D"], SHIFT_INDICES["E"]]:
+                        professionals.append(shifts[staff.id, d, s])
+                        professionals.append(shifts[staff.id, d, SHIFT_INDICES["DE"]])
+                    else:
+                        professionals.append(shifts[staff.id, d, s])
+                elif staff.role == Role.HELPER:
+                    if s in [SHIFT_INDICES["D"], SHIFT_INDICES["E"]]:
+                        helpers.append(shifts[staff.id, d, s])
+                        helpers.append(shifts[staff.id, d, SHIFT_INDICES["DE"]])
+                    else:
+                        helpers.append(shifts[staff.id, d, s])
+
+            if d in HOLIDAYS:
+                if s == SHIFT_INDICES["D"]:
+                    model.Add(sum(professionals) >= 3)
+                    model.Add(sum(helpers) >= 3)
+                elif s == SHIFT_INDICES["E"]:
+                    model.Add(sum(professionals) >= 3)
+                    model.Add(sum(helpers) >= 2)
+                elif s == SHIFT_INDICES["N"]:
+                    model.Add(sum(professionals) >= 2)
+                    model.Add(sum(helpers) >= 2)
+            else:
+                if s == SHIFT_INDICES["D"]:
+                    model.Add(sum(professionals) >= 5)
+                    model.Add(sum(helpers) >= 4)
+                elif s == SHIFT_INDICES["E"]:
+                    model.Add(sum(professionals) >= 4)
+                    model.Add(sum(helpers) >= 4)
+                elif s == SHIFT_INDICES["N"]:
+                    model.Add(sum(professionals) >= 3)
+                model.Add(sum(helpers) >= 3)
 
 
 def apply_all_constraints(model: cp_model.CpModel, shifts):
@@ -226,3 +499,5 @@ def apply_all_constraints(model: cp_model.CpModel, shifts):
     
     # New Era
     add_my_custom_shift_constraints(model, shifts)
+    add_my_costum_role_constraints(model, shifts)
+    add_my_costum_other_constraints(model, shifts)
